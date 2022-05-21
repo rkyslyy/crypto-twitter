@@ -9,10 +9,7 @@ const http = require("http");
 const server = http.createServer(app);
 const { Server } = require("socket.io");
 const io = new Server(server, {
-  cors: {
-    origin: "http://localhost:3000",
-    methods: ["GET", "POST"],
-  },
+  cors: { origin: "http://localhost:3000", methods: ["GET", "POST"] },
 });
 const redis = require("redis");
 const client = redis.createClient();
@@ -24,7 +21,12 @@ app.use(cors());
 client.connect();
 
 app.get("/", async (req, res) => {
-  res.send(await client.hGetAll("cryptos"));
+  const r = {};
+  const x = await client.zRangeWithScores("cryptos", 0, -1);
+  x.reverse().forEach(([cryptoName, tweetCount]) => {
+    r[cryptoName] = tweetCount;
+  });
+  res.send(r);
 });
 
 io.on("connection", (socket) => {
@@ -74,17 +76,20 @@ const fetchTweetCounts = async (cryptos) => {
     );
 
     response.forEach((r) => {
-      client.hSet(
-        "cryptos",
-        new URLSearchParams(r.request.path).values().next().value,
-        r.data.meta.total_tweet_count
-      );
+      client.zAdd("cryptos", {
+        score: Number(r.data.meta.total_tweet_count),
+        value: new URLSearchParams(r.request.path).values().next().value,
+      });
     });
 
-    const res = await client.hGetAll("cryptos");
+    const r = {};
+    const x = await client.zRangeWithScores("cryptos", 0, -1);
+    x.reverse().forEach(({ score, value }) => {
+      r[value] = score;
+    });
 
     socketUsers.forEach((user) => {
-      user.emit("count-update", res);
+      user.emit("count-update", r);
     });
   } catch (error) {
     console.log(error);
@@ -92,7 +97,7 @@ const fetchTweetCounts = async (cryptos) => {
 };
 
 const run = async () => {
-  for (let i = 0; i < CRYPTOS.length / 2; i++) {
+  for (let i = 0; i < CRYPTOS.length; i++) {
     setInterval(() => {
       fetchTweetCounts(CRYPTOS.slice(i * 1, i * 1 + 1));
     }, 30000);
